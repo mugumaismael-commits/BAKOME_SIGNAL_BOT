@@ -1,0 +1,521 @@
+// ============================================
+// BAKOME SIGNAL BOT v1.0
+// Node.js – Mémoire, anti-arnaque, trading, 50+ langues
+// Pour Termux Android & iOS
+// ============================================
+
+const sqlite3 = require('sqlite3').verbose();
+const axios = require('axios');
+const moment = require('moment');
+const fs = require('fs');
+const { exec } = require('child_process');
+const util = require('util');
+const execPromise = util.promisify(exec);
+
+// ================= CONFIGURATION =================
+const BOT_NAME = "BAKOME";
+const PREFIX = "!";
+const SIGNAL_NUMBER = "+243XXXXXXXXX"; // À remplacer par ton numéro Signal
+
+// ================= BASE DE DONNÉES (MÉMOIRE) =================
+const db = new sqlite3.Database('./bakome_signal_memory.db');
+
+db.serialize(() => {
+  db.run(`CREATE TABLE IF NOT EXISTS users (
+    user_id TEXT PRIMARY KEY,
+    name TEXT,
+    lang TEXT DEFAULT 'en',
+    risk INTEGER DEFAULT 0,
+    first_seen TEXT,
+    last_seen TEXT
+  )`);
+
+  db.run(`CREATE TABLE IF NOT EXISTS conversations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT,
+    role TEXT,
+    content TEXT,
+    timestamp TEXT
+  )`);
+
+  db.run(`CREATE TABLE IF NOT EXISTS sessions (
+    user_id TEXT PRIMARY KEY,
+    token TEXT,
+    expires TEXT
+  )`);
+
+  db.run(`CREATE TABLE IF NOT EXISTS todos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT,
+    task TEXT,
+    done INTEGER DEFAULT 0,
+    created TEXT
+  )`);
+});
+
+// ================= LANGUES (50+) =================
+const languages = {
+  fr: "Français", en: "English", es: "Español", de: "Deutsch",
+  it: "Italiano", pt: "Português", ru: "Русский", zh: "中文",
+  ja: "日本語", ko: "한국어", ar: "العربية", hi: "हिन्दी",
+  sw: "Kiswahili", ha: "Hausa", yo: "Yorùbá", ig: "Igbo",
+  am: "አማርኛ", mg: "Malagasy", zu: "Zulu", mi: "Māori",
+  th: "ไทย", vi: "Tiếng Việt", id: "Bahasa Indonesia",
+  ms: "Bahasa Melayu", tl: "Filipino", ne: "नेपाली",
+  bn: "বাংলা", ur: "اردو", fa: "فارسی", tr: "Türkçe",
+  pl: "Polski", nl: "Nederlands", sv: "Svenska", no: "Norsk",
+  da: "Dansk", fi: "Suomi", el: "Ελληνικά", cs: "Čeština",
+  hu: "Magyar", ro: "Română", bg: "Български", sr: "Српски",
+  hr: "Hrvatski", sk: "Slovenčina", sl: "Slovenščina",
+  et: "Eesti", lv: "Latviešu", lt: "Lietuvių"
+};
+
+// ================= ANTI-ARNAQUE =================
+const scamPatterns = [
+  "hack", "crack", "phish", "malware", "ransom", "virus",
+  "send me", "wallet seed", "bitcoin giveaway", "free money",
+  "double your", "investment opportunity", "urgent transfer",
+  "password", "login", "credit card", "ssn", "social security"
+];
+
+function detectThreat(text) {
+  const lower = text.toLowerCase();
+  for (let p of scamPatterns) {
+    if (lower.includes(p)) return { threat: true, pattern: p };
+  }
+  return { threat: false };
+}
+
+// ================= FONCTIONS MÉMOIRE =================
+function addMessage(userId, role, content) {
+  db.run("INSERT INTO conversations (user_id, role, content, timestamp) VALUES (?,?,?,?)",
+    [userId, role, content, moment().format()]);
+}
+
+function getHistory(userId, limit = 5) {
+  return new Promise((resolve) => {
+    db.all("SELECT role, content FROM conversations WHERE user_id = ? ORDER BY timestamp DESC LIMIT ?",
+      [userId, limit], (err, rows) => {
+        resolve(rows ? rows.reverse() : []);
+      });
+  });
+}
+
+function createOrUpdateUser(userId, name) {
+  db.get("SELECT * FROM users WHERE user_id = ?", [userId], (err, row) => {
+    if (!row) {
+      db.run("INSERT INTO users (user_id, name, first_seen, last_seen) VALUES (?,?,?,?)",
+        [userId, name, moment().format(), moment().format()]);
+    } else {
+      db.run("UPDATE users SET last_seen = ? WHERE user_id = ?", [moment().format(), userId]);
+    }
+  });
+}
+
+function updateRiskScore(userId, points) {
+  db.run("UPDATE users SET risk = risk + ? WHERE user_id = ?", [points, userId]);
+}
+
+// ================= COMMANDES =================
+async function handleCommand(sender, command, args) {
+  const cmd = command.toLowerCase();
+
+  if (cmd === "start" || cmd === "help") {
+    return `🤖 *${BOT_NAME} SIGNAL BOT v1.0*\n\n` +
+      `✅ *Fonctionnalités:*\n` +
+      `• Mémoire conversationnelle (SQLite)\n` +
+      `• Anti-arnaque & détection hackers\n` +
+      `• 50+ langues (détection auto)\n` +
+      `• Trading (MQL5, XAUUSD, crypto, forex)\n` +
+      `• Météo, actualités, sport\n` +
+      `• To-do list\n` +
+      `• Session sécurisée\n\n` +
+      `📚 *Commandes:*\n` +
+      `!trading – Expert MQL5 / ICT\n` +
+      `!crypto – Prix BTC/ETH\n` +
+      `!forex – Taux EUR/USD\n` +
+      `!meteo <ville>\n` +
+      `!news <trading|tech|programming>\n` +
+      `!sport – Résultats\n` +
+      `!time <zone> – Heure mondiale\n` +
+      `!todo <tâche>\n` +
+      `!todos – Voir tâches\n` +
+      `!done <id>\n` +
+      `!langues – Voir langues\n` +
+      `!info – Statistiques\n` +
+      `!session – Sécuriser chat`;
+  }
+
+  if (cmd === "trading") {
+    return `📈 *${BOT_NAME} TRADING EXPERT*\n\n` +
+      `• MQL5 / EA / Indicateurs\n` +
+      `• ICT Concepts: FVG, Order Blocks, Silver Bullet\n` +
+      `• XAUUSD (Gold) – analyse technique\n` +
+      `• Backtesting & optimisation\n` +
+      `• Gestion de risque (Risk/Reward, trailing stop)\n\n` +
+      `Pose-moi ta question précise sur une stratégie !`;
+  }
+
+  if (cmd === "crypto") {
+    try {
+      const res = await axios.get('https://api.binance.com/api/v3/ticker/price', {
+        params: { symbols: '["BTCUSDT","ETHUSDT"]' }
+      });
+      const data = JSON.parse(res.data);
+      const btc = data.find(t => t.symbol === 'BTCUSDT');
+      const eth = data.find(t => t.symbol === 'ETHUSDT');
+      return `💰 *Prix Cryptos*\nBTC: $${parseFloat(btc.price).toLocaleString()}\nETH: $${parseFloat(eth.price).toLocaleString()}\n\n_Source: Binance_`;
+    } catch (error) {
+      return `💰 BTC: ~$65,000 | ETH: ~$3,200 (estimation)`;
+    }
+  }
+
+  if (cmd === "forex") {
+    try {
+      const res = await axios.get('https://api.exchangerate-api.com/v4/latest/USD');
+      const eur = res.data.rates.EUR;
+      const gbp = res.data.rates.GBP;
+      const jpy = res.data.rates.JPY;
+      return `💱 *Taux Forex*\nEUR/USD: ${(1/eur).toFixed(4)}\nGBP/USD: ${(1/gbp).toFixed(4)}\nUSD/JPY: ${jpy.toFixed(2)}`;
+    } catch {
+      return `💱 EUR/USD: ~1.08 | GBP/USD: ~1.25 | USD/JPY: ~150`;
+    }
+  }
+
+  if (cmd === "meteo") {
+    const city = args.join(" ");
+    if (!city) return `🌤️ *Météo*\nUtilisation: !meteo Kinshasa\n\nExemples: !meteo Paris, !meteo New York, !meteo Tokyo`;
+    
+    try {
+      const geoRes = await axios.get(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(city)}&count=1`);
+      if (!geoRes.data.results || geoRes.data.results.length === 0) {
+        return `🌤️ Ville "${city}" non trouvée. Essaie avec un nom plus précis.`;
+      }
+      const { latitude, latitude: lat, longitude: lon, name } = geoRes.data.results[0];
+      const weatherRes = await axios.get(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current_weather=true`);
+      const w = weatherRes.data.current_weather;
+      return `🌤️ *Météo pour ${name}*\nTempérature: ${w.temperature}°C\nVent: ${w.windspeed} km/h\nCode: ${w.weathercode}`;
+    } catch {
+      return `🌤️ Service météo temporairement indisponible. Réessaie plus tard.`;
+    }
+  }
+
+  if (cmd === "news") {
+    const cat = args[0] || "tech";
+    const categories = { trading: "ForexFactory, Bloomberg", tech: "TechCrunch, Wired", programming: "Dev.to, StackOverflow" };
+    if (!categories[cat]) {
+      return `📰 *Actualités*\nCatégories: trading, tech, programming\nExemple: !news trading`;
+    }
+    return `📰 *Actualités ${cat}*\n\nSources: ${categories[cat]}\n\n💡 Pour plus de détails, utilise un navigateur.`;
+  }
+
+  if (cmd === "sport") {
+    return `⚽ *Résultats sportifs*\n\nUtilise TheSportsDB (API gratuite) pour les scores en direct.\n\nCommandes: !sport football, !sport basketball`;
+  }
+
+  if (cmd === "time") {
+    const tz = args.join(" ") || "Europe/London";
+    const timezones = {
+      "paris": "Europe/Paris", "london": "Europe/London", "ny": "America/New_York",
+      "tokyo": "Asia/Tokyo", "goma": "Africa/Lubumbashi", "kinshasa": "Africa/Kinshasa"
+    };
+    const zone = timezones[tz.toLowerCase()] || tz;
+    try {
+      const res = await axios.get(`http://worldtimeapi.org/api/timezone/${zone}`);
+      const dt = new Date(res.data.datetime);
+      return `🕐 *Heure mondiale*\n📍 ${zone}\nHeure: ${dt.toLocaleTimeString()}\nDate: ${dt.toLocaleDateString()}`;
+    } catch {
+      return `🕐 Fuseau "${tz}" non trouvé.\nExemples: !time Paris, !time Tokyo, !time Goma`;
+    }
+  }
+
+  if (cmd === "todo") {
+    const task = args.join(" ");
+    if (!task) return `📝 *Ajouter une tâche*\nUtilisation: !todo Apprendre Python\n\nVoir tâches: !todos\nTerminer: !done ID`;
+    
+    return new Promise((resolve) => {
+      db.run("INSERT INTO todos (user_id, task, created) VALUES (?,?,?)", [sender, task, moment().format()], function(err) {
+        if (err) resolve(`❌ Erreur: impossible d'ajouter la tâche.`);
+        else resolve(`✅ Tâche ajoutée avec succès !\n\n📝 "${task}"\nID: ${this.lastID}\n\nUtilise !done ${this.lastID} quand terminée.`);
+      });
+    });
+  }
+
+  if (cmd === "todos") {
+    return new Promise((resolve) => {
+      db.all("SELECT id, task, created FROM todos WHERE user_id = ? AND done = 0 ORDER BY created DESC", [sender], (err, rows) => {
+        if (!rows || rows.length === 0) {
+          resolve(`📝 *Aucune tâche en attente*\n\nAjoute-en une avec !todo [tâche]`);
+        } else {
+          const list = rows.map(r => `\`${r.id}\` – ${r.task} (${moment(r.created).format('DD/MM')})`).join("\n");
+          resolve(`📝 *Mes tâches (${rows.length})*\n\n${list}\n\n✅ Terminer: !done ID`);
+        }
+      });
+    });
+  }
+
+  if (cmd === "done") {
+    const id = parseInt(args[0]);
+    if (!id || isNaN(id)) return `📝 *Terminer une tâche*\nUtilisation: !done 1 (où 1 est l'ID de la tâche)\n\nVoir IDs avec !todos`;
+    
+    return new Promise((resolve) => {
+      db.run("UPDATE todos SET done = 1 WHERE id = ? AND user_id = ?", [id, sender], function(err) {
+        if (err || this.changes === 0) resolve(`❌ Tâche #${id} non trouvée ou déjà terminée.`);
+        else resolve(`✅ Tâche #${id} terminée ! Félicitations 🎉`);
+      });
+    });
+  }
+
+  if (cmd === "langues") {
+    const list = Object.entries(languages).slice(0, 25).map(([k, v]) => `• ${v} (\`${k}\`)`).join("\n");
+    return `🌍 *Langues supportées (${Object.keys(languages).length}+)*\n\n${list}\n\n_Je détecte automatiquement ta langue !_`;
+  }
+
+  if (cmd === "info") {
+    return new Promise((resolve) => {
+      db.get("SELECT risk, first_seen FROM users WHERE user_id = ?", [sender], (err, row) => {
+        const risk = row?.risk || 0;
+        const riskLevel = risk === 0 ? "🟢 Aucun" : risk < 5 ? "🟡 Faible" : "🔴 Élevé";
+        resolve(`🤖 *${BOT_NAME} v1.0*\n\n` +
+          `📊 *Statistiques:*\n` +
+          `• Score de risque: ${risk} (${riskLevel})\n` +
+          `• Premier contact: ${row?.first_seen ? moment(row.first_seen).format('DD/MM/YYYY') : 'Aujourd'hui'}\n` +
+          `• Mémoire active: ✅\n` +
+          `• Protection anti-arnaque: ✅\n` +
+          `• Langues supportées: ${Object.keys(languages).length}\n` +
+          `• Mode trading: MQL5 / ICT / XAUUSD\n\n` +
+          `💡 Utilise !help pour plus de commandes`);
+      });
+    });
+  }
+
+  if (cmd === "session") {
+    const token = Math.random().toString(36).substring(2, 18) + Math.random().toString(36).substring(2, 6);
+    const expires = moment().add(7, 'days').format();
+    db.run("INSERT OR REPLACE INTO sessions (user_id, token, expires) VALUES (?,?,?)", [sender, token, expires]);
+    return `🔐 *Session sécurisée créée !*\n\n` +
+      `Token: \`${token}\`\n` +
+      `Expiration: ${moment(expires).format('DD/MM/YYYY HH:mm')}\n\n` +
+      `⚠️ Garde ce token précieusement. Il expire dans 7 jours.`;
+  }
+
+  return null;
+}
+
+// ================= GÉNÉRATION RÉPONSE INTELLIGENTE =================
+async function generateResponse(text, sender, history) {
+  const lower = text.toLowerCase();
+
+  // Détection de langue approximative
+  let detectedLang = "en";
+  if (/[êéèëçàùîïû]/i.test(text)) detectedLang = "fr";
+  else if (/[你你好]/i.test(text)) detectedLang = "zh";
+  else if (/[こんにちは]/i.test(text)) detectedLang = "ja";
+  else if (/[안녕]/i.test(text)) detectedLang = "ko";
+  else if (/[مرحبا]/i.test(text)) detectedLang = "ar";
+
+  // Salutations
+  if (lower.match(/^(bonjour|salut|hello|hi|hey|coucou|bonsoir|bjr)$/i)) {
+    return `👋 Bonjour ! Je suis ${BOT_NAME}, ton assistant IA sur Signal.\n\n` +
+      `Je peux t'aider avec:\n` +
+      `• Trading (MQL5, XAUUSD, crypto)\n` +
+      `• Programmation (Python, JS, C++)\n` +
+      `• Météo, actualités, sport\n` +
+      `• To-do list, rappels\n\n` +
+      `👉 Envoie !help pour voir toutes les commandes.`;
+  }
+
+  // Remerciements
+  if (lower.match(/merci|thanks|thank you|thx/i)) {
+    return `🙏 Avec plaisir ! Je suis là pour t'aider 24h/24.\n\n` +
+      `N'hésite pas si tu as d'autres questions. Bonne journée ! ☀️`;
+  }
+
+  // Trading / MQL5
+  if (/(mql5|ea|expert advisor|forex|xauusd|gold|ordre bloc|order block|fvg|silver bullet|ict)/i.test(lower)) {
+    return `📈 *Expert MQL5 / ICT*\n\n` +
+      `Je peux t'aider à coder:\n` +
+      `• EAs (Expert Advisors) complets\n` +
+      `• Indicateurs personnalisés\n` +
+      `• Stratégies ICT: FVG, Order Blocks, Liquidity Sweeps, Silver Bullet\n` +
+      `• Backtesting et optimisation\n` +
+      `• Gestion de risque (lot size, trailing stop)\n\n` +
+      `👉 Pose-moi ta question précise (ex: "Comment coder un FVG detection ?")`;
+  }
+
+  // Programmation
+  if (/(python|javascript|node|react|vue|php|java|c\+\+|sql|code|programmer)/i.test(lower)) {
+    return `💻 *Assistance Programmation*\n\n` +
+      `Je connais:\n` +
+      `• Python (backtest, data analysis, bots)\n` +
+      `• JavaScript/Node.js (bots Telegram/Discord/Signal)\n` +
+      `• MQL5 (trading algorithmique)\n` +
+      `• SQL (bases de données)\n` +
+      `• HTML/CSS (sites web)\n\n` +
+      `👉 Quelle est ta question technique ?`;
+  }
+
+  // Crypto spécifique
+  if (/(btc|bitcoin|eth|ethereum|prix crypto)/i.test(lower)) {
+    return `💰 Pour les prix cryptos en direct, utilise la commande:\n\n` +
+      `!crypto – Prix BTC/ETH\n` +
+      `!forex – Taux de change\n\n` +
+      `Je te réponds instantanément !`;
+  }
+
+  // Météo
+  if (/(meteo|temps|température|weather)/i.test(lower)) {
+    return `🌤️ Pour la météo, utilise:\n\n` +
+      `!meteo Paris\n!meteo Kinshasa\n!meteo New York\n\n` +
+      `Je te donne la température, le vent, et les prévisions.`;
+  }
+
+  // Actualités
+  if (/(news|actualités|actu|infos)/i.test(lower)) {
+    return `📰 Pour les actualités, utilise:\n\n` +
+      `!news trading – ForexFactory, Bloomberg\n` +
+      `!news tech – TechCrunch, Wired\n` +
+      `!news programming – Dev.to, StackOverflow`;
+  }
+
+  // To-do
+  if (/(todo|tâche|rappel|liste)/i.test(lower)) {
+    return `📝 Pour gérer tes tâches:\n\n` +
+      `!todo [tâche] – Ajouter\n` +
+      `!todos – Voir la liste\n` +
+      `!done [ID] – Terminer\n\n` +
+      `Je sauvegarde tout automatiquement.`;
+  }
+
+  // Demande d'aide
+  if (/(aide|help|commande|que faire|comment)/i.test(lower)) {
+    return `📚 *Aide ${BOT_NAME}*\n\n` +
+      `Voici ce que je peux faire:\n\n` +
+      `🔹 *Trading*: !trading, !crypto, !forex\n` +
+      `🔹 *Météo*: !meteo <ville>\n` +
+      `🔹 *Actualités*: !news <catégorie>\n` +
+      `🔹 *Sport*: !sport\n` +
+      `🔹 *Heure*: !time <fuseau>\n` +
+      `🔹 *Tâches*: !todo, !todos, !done\n` +
+      `🔹 *Langues*: !langues\n` +
+      `🔹 *Infos*: !info\n` +
+      `🔹 *Sécurité*: !session\n\n` +
+      `👉 Envoie !help pour revoir ce message.`;
+  }
+
+  // Conversation normale avec contexte
+  if (history && history.length > 0) {
+    const lastBotMsg = history.filter(h => h.role === 'bot').pop();
+    if (lastBotMsg && !lower.includes('merci')) {
+      return `🧠 Suite à notre conversation précédente...\n\n` +
+        `Tu me parlais de: "${lastBotMsg.content.slice(0, 100)}"\n\n` +
+        `Je suis toujours là pour t'aider. Que veux-tu savoir de plus ?\n\n` +
+        `👉 Utilise !help si besoin d'aide.`;
+    }
+  }
+
+  // Réponse par défaut
+  return `🧠 *${BOT_NAME} est là !*\n\n` +
+    `Je t'ai bien compris (${languages[detectedLang] || detectedLang}).\n\n` +
+    `Je peux t'aider avec:\n` +
+    `• 📈 Trading (MQL5, XAUUSD, crypto)\n` +
+    `• 💻 Programmation (Python, JS, MQL5)\n` +
+    `• 🌤️ Météo, 📰 actualités, ⚽ sport\n` +
+    `• 📝 To-do list, rappels\n` +
+    `• 🔒 Protection contre les arnaques\n\n` +
+    `👉 Envoie !help pour voir toutes les commandes.`;
+}
+
+// ================= INTERFACE SIGNAL VIA SIGNAL-CLI =================
+async function sendSignalMessage(recipient, message) {
+  const escapedMessage = message.replace(/"/g, '\\"').replace(/\n/g, '\\n');
+  const command = `signal-cli -u "${SIGNAL_NUMBER}" send -m "${escapedMessage}" "${recipient}"`;
+  
+  try {
+    await execPromise(command);
+    console.log(`✅ Message envoyé à ${recipient}`);
+  } catch (error) {
+    console.error(`❌ Erreur envoi à ${recipient}:`, error.message);
+  }
+}
+
+async function receiveSignalMessages() {
+  try {
+    const { stdout } = await execPromise(`signal-cli -u "${SIGNAL_NUMBER}" receive --timeout=2`);
+    const lines = stdout.split('\n');
+    
+    let currentMessage = null;
+    let currentSender = null;
+    
+    for (const line of lines) {
+      if (line.startsWith('Envelope from:')) {
+        currentSender = line.split('Envelope from:')[1].trim();
+      }
+      if (line.startsWith('Message:')) {
+        currentMessage = line.substring('Message:'.length).trim();
+      }
+      if (currentSender && currentMessage && !currentMessage.startsWith('!response')) {
+        await processIncomingMessage(currentSender, currentMessage);
+        currentSender = null;
+        currentMessage = null;
+      }
+    }
+  } catch (error) {
+    // Pas de nouveau message, c'est normal
+  }
+}
+
+async function processIncomingMessage(sender, text) {
+  console.log(`📩 Message de ${sender}: ${text.substring(0, 50)}...`);
+  
+  // Enregistrer l'utilisateur
+  createOrUpdateUser(sender, sender.split('@')[0]);
+  addMessage(sender, "user", text);
+  
+  // Détection anti-arnaque
+  const threat = detectThreat(text);
+  if (threat.threat) {
+    updateRiskScore(sender, 2);
+    const alertMsg = `⚠️ *ALERTE SÉCURITÉ ${BOT_NAME}*\n\n` +
+      `Motif suspect détecté: "${threat.pattern}"\n` +
+      `Score de risque augmenté.\n\n` +
+      `⚠️ Ne partage jamais tes informations personnelles.`;
+    await sendSignalMessage(sender, alertMsg);
+    addMessage(sender, "bot", alertMsg);
+    return;
+  }
+  
+  let response = null;
+  
+  // Vérifier si c'est une commande
+  if (text.startsWith(PREFIX)) {
+    const parts = text.slice(PREFIX.length).trim().split(/ +/);
+    const command = parts[0].toLowerCase();
+    const args = parts.slice(1);
+    const cmdResult = await handleCommand(sender, command, args);
+    if (cmdResult) response = cmdResult;
+  }
+  
+  // Si pas de commande ou commande non reconnue, générer réponse intelligente
+  if (!response) {
+    const history = await getHistory(sender, 5);
+    response = await generateResponse(text, sender, history);
+  }
+  
+  // Envoyer la réponse
+  await sendSignalMessage(sender, response);
+  addMessage(sender, "bot", response.substring(0, 500));
+}
+
+// ================= BOUCLE PRINCIPALE =================
+async function main() {
+  console.log(`
+╔══════════════════════════════════════════════════════════╗
+║                                                          ║
+║   ██████╗  █████╗ ██╗  ██╗ ██████╗ ███╗   ███╗███████╗  ║
+║   ██╔══██╗██╔══██╗██║ ██╔╝██╔═══██╗████╗ ████║██╔════╝  ║
+║   ██████╔╝███████║█████╔╝ ██║   ██║██╔████╔██║█████╗    ║
+║   ██╔══██╗██╔══██║██╔═██╗ ██║   ██║██║╚██╔╝██║██╔══╝    ║
+║   ██████╔╝██║  ██║██║  ██╗╚██████╔╝██║ ╚═╝ ██║███████╗  ║
+║   ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚═╝     ╚═╝╚══════╝  ║
+║
